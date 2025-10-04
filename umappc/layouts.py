@@ -448,24 +448,30 @@ def _optimize_layout_euclidean_densmap_epoch_init(
     for i in range(re_sum.size):
         re_sum[i] = np.log(epsilon + (re_sum[i] / phi_sum[i]))
 
-
 def optimize_layout_euclidean(
     head_embedding,
     tail_embedding,
     head,
     tail,
+    weight,
+    gradient_using_prev_embedding,
     n_epochs,
+    n_epoch_burnin,
     n_vertices,
     epochs_per_sample,
     a,
     b,
     rng_state,
+    calculate_cross_entropy=False,
+    calculate_cross_entropy_accurate=False,
+    cross_entropy_error_accurate_n_neg_samples=20,
+    cluster_labels=None,
+    cluster_centers=None,
     clustering=False,
-    cluster_init="kmeans",
-    n_clusters=5,
     lagrange=1,
     gamma=1.0,
     initial_alpha=1.0,
+    learning_rate_decay=True,
     negative_sample_rate=5.0,
     parallel=False,
     verbose=False,
@@ -551,11 +557,26 @@ def optimize_layout_euclidean(
 
     dim = head_embedding.shape[1]
     alpha = initial_alpha
+    if cluster_labels is None:
+        cluster_labels = np.array([], dtype=int)
+    if cluster_centers is None:
+        cluster_centers = np.array([[]], dtype=np.float32)
 
     epochs_per_negative_sample = epochs_per_sample / negative_sample_rate
     epoch_of_next_negative_sample = epochs_per_negative_sample.copy()
     epoch_of_next_sample = epochs_per_sample.copy()
 
+    # burn-in the edge sampling
+    for n in range(n_epoch_burnin):
+        for i in range(epochs_per_sample.shape[0]):
+            if epoch_of_next_sample[i] <= n:
+                epoch_of_next_sample[i] += epochs_per_sample[i]
+                n_neg_samples = int(
+                    (n - epoch_of_next_negative_sample[i]) / epochs_per_negative_sample[i]
+                )
+                epoch_of_next_negative_sample[i] += (
+                        n_neg_samples * epochs_per_negative_sample[i]
+                )
     optimize_fn = numba.njit(
         _optimize_layout_euclidean_single_epoch, fastmath=True, parallel=parallel
     )
@@ -586,27 +607,26 @@ def optimize_layout_euclidean(
         dens_phi_sum = np.zeros(1, dtype=np.float32)
         dens_re_sum = np.zeros(1, dtype=np.float32)
 
-    cluster_labels = np.array([],dtype=int)
-    cluster_centers = np.array([[]],dtype=np.float64, order="C")
-    # cluster_centers = np.array([[]]).astype(np.float64, order="C")
-    if clustering:
-        cluster_labels, cluster_centers = init_clusters(head_embedding,
-                                                        n_clusters,
-                                                        np.abs(rng_state[0]),
-                                                        cluster_init)
-
-    aux_data_optimization = {}
-
     epochs_list = None
     embedding_list = []
     if isinstance(n_epochs, list):
-        epochs_list = n_epochs
-        n_epochs = max(epochs_list)
+        if 0 in n_epochs:
+            embedding_list.append(head_embedding.copy())
+        epochs_list = [x - 1 for x in n_epochs]
+        n_epochs = max(n_epochs)
 
     if "disable" not in tqdm_kwds:
         tqdm_kwds["disable"] = not verbose
 
-    for n in tqdm(range(n_epochs), **tqdm_kwds):
+    cross_entropy_error = None
+    cross_entropy_error_accurate = None
+    if calculate_cross_entropy:
+        cross_entropy_error = np.zeros(n_epochs + 1, np.float32)
+    if calculate_cross_entropy_accurate:
+        cross_entropy_error_accurate = np.zeros(n_epochs + 1, np.float32)
+    kmeans_penalty = np.zeros(n_epochs + 1, np.float32)
+
+    for n in tqdm(range(n_epoch_burnin, n_epochs), **tqdm_kwds):
 
         densmap_flag = (
             densmap
@@ -637,14 +657,13 @@ def optimize_layout_euclidean(
             dens_re_mean = 0
             dens_re_cov = 0
 
-        # if clustering:
-        #     head_embedding_original = head_embedding.copy()
-
         optimize_fn(
             head_embedding,
             tail_embedding,
             head,
             tail,
+            weight,
+            gradient_using_prev_embedding,
             n_vertices,
             epochs_per_sample,
             a,
@@ -658,6 +677,11 @@ def optimize_layout_euclidean(
             epoch_of_next_negative_sample,
             epoch_of_next_sample,
             n,
+            n_epoch_burnin,
+            cross_entropy_error,
+            cross_entropy_error_accurate,
+            cross_entropy_error_accurate_n_neg_samples,
+            kmeans_penalty,
             densmap_flag,
             dens_phi_sum,
             dens_re_sum,
@@ -674,24 +698,8 @@ def optimize_layout_euclidean(
             lagrange,
         )
 
-        # if clustering:
-        #     if n == 1:
-        #         print("add penalty to embedding")
-        #     # for i in numba.prange(n_vertices):
-        #     for i in range(n_vertices):
-        #         current = head_embedding[i]
-        #         current_original = head_embedding_original[i]
-        #         label = cluster_labels[i]
-        #         current -= alpha * lagrange * 2 * (current_original - cluster_centers[label])
-        #         # current -= alpha * lagrange    * 2 * (current - cluster_centers[label])
-
-
-        if clustering:
-            cluster_labels, cluster_centers = optimize_clusters(head_embedding,
-                                                                n_clusters,
-                                                                np.abs(rng_state[0]))
-
-        alpha = initial_alpha * (1.0 - (float(n) / float(n_epochs)))
+        if learning_rate_decay:
+            alpha = initial_alpha * (1.0 - (float(n - n_epoch_burnin) / float(n_epochs)))
 
         if verbose and n % int(n_epochs / 10) == 0:
             print("\tcompleted ", n, " / ", n_epochs, "epochs")
@@ -704,11 +712,9 @@ def optimize_layout_euclidean(
         embedding_list.append(head_embedding.copy())
 
     if clustering:
-        aux_data_optimization["cluster_labels"] = cluster_labels
-        aux_data_optimization["cluster_centers"] = cluster_centers
-
-    return head_embedding if epochs_list is None else embedding_list, aux_data_optimization
-
+        return head_embedding if epochs_list is None else embedding_list, cross_entropy_error, cross_entropy_error_accurate, kmeans_penalty
+    else:
+        return head_embedding if epochs_list is None else embedding_list, cross_entropy_error, cross_entropy_error_accurate
 
 def _optimize_layout_generic_single_epoch(
     epochs_per_sample,
