@@ -59,74 +59,13 @@ def rdist(x, y):
 
     return result
 
-def init_clusters(embedding, n_clusters, seed, cluster_init="kmeans"):
-    """Initialize the cluster labels (cluster assignments).
-
-    Parameters
-    ----------
-    embedding: array of shape (n_samples, n_components)
-        The initial embedding to be improved by SGD in Projection Pursuit Clustering UMAP.
-
-    n_clusters: int
-        The number of clusters
-
-    seed: int
-        The seed required by sklearn KMeans to initialize the k cluster centers or the seed required by np.random
-        to initialize the random generator
-
-    cluster_init: string (default 'k-means')
-        The method for cluster initialization, which by default is 'k-means'. This is the recommended option so that
-        Projection Pursuit Clustering UMAP has a good starting point for the optimization. Alternatively, 'random' will
-        asssign each sample from the data a random cluster label.
-
-    Returns
-    -------
-    The clusters labels for the embedding and the ``n_clusters`` cluster centers
-    """
-    if cluster_init == "kmeans":
-        kmeans = KMeans(n_clusters=n_clusters, init="k-means++", n_init="auto", random_state=seed).fit(embedding)
-        cluster_labels = kmeans.labels_
-        cluster_centers = kmeans.cluster_centers_
-    else:
-        n_samples = embedding.shape[0]
-        rng_generator = np.random.default_rng(seed=seed)
-        cluster_labels = rng_generator.integers(low=0, high=n_clusters-1, size=n_samples, endpoint=True)
-        df = pd.DataFrame(embedding)
-        df['Cluster'] = cluster_labels
-        cluster_centers = df.groupby('Cluster').agg('mean').to_numpy()
-    # return cluster_labels, cluster_centers.astype(np.float32, order="C")
-    return cluster_labels, cluster_centers
-
-def optimize_clusters(embedding, n_clusters, seed):
-    """Optimize the cluster labels (cluster assignments).
-
-     Parameters
-     ----------
-     embedding: array of shape (n_samples, n_components)
-        The embedding for the current epoch of Projection Pursuit Clustering UMAP.
-
-     n_clusters: int
-        The number of clusters
-
-     seed: int
-        # The seed required by np.random to initialize the random generator
-        The seed required by sklearn KMeans to initialize the k cluster centers
-
-     Returns
-     -------
-     The clusters labels for the embedding and the ``n_clusters`` cluster centers
-     """
-    kmeans = KMeans(n_clusters=n_clusters, init="k-means++", n_init="auto", random_state=seed).fit(embedding)
-    cluster_labels = kmeans.labels_
-    cluster_centers = kmeans.cluster_centers_
-    return cluster_labels, cluster_centers
-
-
 def _optimize_layout_euclidean_single_epoch(
     head_embedding,
     tail_embedding,
     head,
     tail,
+    weight,
+    gradient_using_prev_embedding,
     n_vertices,
     epochs_per_sample,
     a,
@@ -140,6 +79,11 @@ def _optimize_layout_euclidean_single_epoch(
     epoch_of_next_negative_sample,
     epoch_of_next_sample,
     n,
+    n_epoch_burnin,
+    cross_entropy_error,
+    cross_entropy_error_accurate,
+    cross_entropy_error_accurate_n_neg_samples,
+    kmeans_penalty,
     densmap_flag,
     dens_phi_sum,
     dens_re_sum,
@@ -155,9 +99,110 @@ def _optimize_layout_euclidean_single_epoch(
     cluster_centers,
     lagrange,
 ):
-    if clustering:
+
+    if gradient_using_prev_embedding:
         head_embedding_original = head_embedding.copy()
-        # tail_embedding_original = tail_embedding.copy()
+        tail_embedding_original = head_embedding.copy()
+
+    rng_state_copy = rng_state.copy()
+
+    if n == 0 + n_epoch_burnin:
+        # Calculate the cross entropy using edge and negative sampling
+        if cross_entropy_error is not None:
+            rng_state_cross_entropy_error_epoch_zero = rng_state.copy()
+            cross_entropy_error_value = 0.0
+            for i in numba.prange(epochs_per_sample.shape[0]):
+                if epoch_of_next_sample[i] <= 0 + n_epoch_burnin:
+                    j = head[i]
+                    k = tail[i]
+                    current = head_embedding[j]
+                    other = tail_embedding[k]
+                    dist_squared = rdist(current, other)
+
+                    # Calculate the cross entropy for sampled edges (binary edges with positive weight = 1): attractive term for sampled edges, repulsive term is 0
+                    if dist_squared > 0.0:
+                        cross_entropy_error_value += np.log(
+                            pow(1 + a * pow(dist_squared, b), -1)
+                        )
+                    else:
+                        # If dist_squared = 0, attractive term is 0
+                        cross_entropy_error_value += 0
+
+                    n_neg_samples = int(
+                        (n - epoch_of_next_negative_sample[i]) / epochs_per_negative_sample[i]
+                    )
+
+                    # Calculate the cross entropy for edges with zero weight: attractive term is 0, repulsive term using negative sampling.
+                    for p in range(n_neg_samples):
+                        k = tau_rand_int(rng_state_cross_entropy_error_epoch_zero) % n_vertices
+                        other = tail_embedding[k]
+                        dist_squared = rdist(current, other)
+
+                        if dist_squared > 0.0:
+                            cross_entropy_error_value += np.log(
+                                1 - pow(1 + a * pow(dist_squared, b), -1)
+                            )
+                        else:
+                            # If dist_squared = 0, repulsive term uses epsilon = 0.001 to avoid Inf
+
+                            cross_entropy_error_value += np.log(
+                                1 - pow(1 + a * pow(dist_squared + 0.001, b), -1)
+                            )
+
+            cross_entropy_error[0 + n_epoch_burnin] = -1 * cross_entropy_error_value
+
+        # Calculate a more accurate cross entropy where many negative samples are included in computations
+        if cross_entropy_error_accurate is not None:
+            rng_state_cross_entropy_error_accurate_epoch_zero = rng_state.copy()
+            cross_entropy_error_accurate_value = 0.0
+            for i in numba.prange(epochs_per_sample.shape[0]):
+                j = head[i]
+                k = tail[i]
+                current = head_embedding[j]
+                other = tail_embedding[k]
+                dist_squared = rdist(current, other)
+
+                # Calculate the cross entropy for edges with positive weight : attractive term for positive weights, repulsive term for positive weights.
+                if dist_squared > 0.0:
+                    cross_entropy_error_accurate_value += weight[i] * np.log(
+                        pow(1 + a * pow(dist_squared, b), -1)
+                    ) + (1 - weight[i]) * np.log(
+                        1 - pow(1 + a * pow(dist_squared, b), -1)
+                    )
+                else:
+                    # If dist_squared = 0, attractive term is 0 and repulsive term uses epsilon = 0.001 to avoid Inf
+                    cross_entropy_error_accurate_value += 0 + (1 - weight[i]) * np.log(
+                        1 - pow(1 + a * pow(dist_squared + 0.001, b), -1)
+                    )
+
+                # Calculate the cross entropy for edges with zero weight: attractive term is 0, repulsive term using negative sampling.
+                for p in range(cross_entropy_error_accurate_n_neg_samples):
+                    k = tau_rand_int(rng_state_cross_entropy_error_accurate_epoch_zero) % n_vertices
+                    other = tail_embedding[k]
+                    dist_squared = rdist(current, other)
+                    if dist_squared > 0.0:
+                        cross_entropy_error_accurate_value += 1 * np.log(
+                            1 - pow(1 + a * pow(dist_squared, b), -1)
+                        )
+                    else:
+                        # If dist_squared = 0, repulsive term uses epsilon = 0.001 to avoid Inf
+                        cross_entropy_error_accurate_value += 1 * np.log(
+                            1 - pow(1 + a * pow(dist_squared + 0.001, b) , -1)
+                        )
+
+            cross_entropy_error_accurate[0 + n_epoch_burnin] = -1 * cross_entropy_error_accurate_value
+
+        kmeans_penalty_value = 0.0
+        if clustering and lagrange > 0:
+            for i in numba.prange(n_vertices):
+                current = head_embedding[i]
+                label = cluster_labels[i]
+                within_cluster_dist_squared = rdist(current, cluster_centers[label])
+                kmeans_penalty_value += lagrange * within_cluster_dist_squared
+        kmeans_penalty[0 + n_epoch_burnin] = kmeans_penalty_value
+
+    epoch_of_next_sample_copy = epoch_of_next_sample.copy()
+    epoch_of_next_negative_sample_copy = epoch_of_next_negative_sample.copy()
 
     for i in numba.prange(epochs_per_sample.shape[0]):
         if epoch_of_next_sample[i] <= n:
@@ -168,6 +213,10 @@ def _optimize_layout_euclidean_single_epoch(
             other = tail_embedding[k]
 
             dist_squared = rdist(current, other)
+            if gradient_using_prev_embedding:
+                current_orig = head_embedding_original[j]
+                other_orig = tail_embedding_original[k]
+                dist_squared = rdist(current_orig, other_orig)
 
             if densmap_flag:
                 phi = 1.0 / (1.0 + a * pow(dist_squared, b))
@@ -211,6 +260,8 @@ def _optimize_layout_euclidean_single_epoch(
 
             for d in range(dim):
                 grad_d = clip(grad_coeff * (current[d] - other[d]))
+                if gradient_using_prev_embedding:
+                    grad_d = clip(grad_coeff * (current_orig[d] - other_orig[d]))
 
                 if densmap_flag:
                     # FIXME: grad_cor_coeff might be referenced before assignment
@@ -233,6 +284,9 @@ def _optimize_layout_euclidean_single_epoch(
                 other = tail_embedding[k]
 
                 dist_squared = rdist(current, other)
+                if gradient_using_prev_embedding:
+                    other_orig = tail_embedding_original[k]
+                    dist_squared = rdist(current_orig, other_orig)
 
                 if dist_squared > 0.0:
                     grad_coeff = 2.0 * gamma * b
@@ -247,6 +301,8 @@ def _optimize_layout_euclidean_single_epoch(
                 for d in range(dim):
                     if grad_coeff > 0.0:
                         grad_d = clip(grad_coeff * (current[d] - other[d]))
+                        if gradient_using_prev_embedding:
+                            grad_d = clip(grad_coeff * (current_orig[d] - other_orig[d]))
                     else:
                         grad_d = 0
                     current[d] += grad_d * alpha
@@ -255,13 +311,110 @@ def _optimize_layout_euclidean_single_epoch(
                 n_neg_samples * epochs_per_negative_sample[i]
             )
 
-    if clustering:
+    kmeans_penalty_value = 0.0
+
+    # Add the cluster penalty gradient
+    if clustering and lagrange > 0:
         for i in numba.prange(n_vertices):
             current = head_embedding[i]
-            current_original = head_embedding_original[i]
             label = cluster_labels[i]
-            current -= alpha * lagrange * 2 * (current_original - cluster_centers[label])
+            kmeans_gradient = 2 * (current - cluster_centers[label])
+            within_cluster_dist_squared = rdist(current, cluster_centers[label])
+            if gradient_using_prev_embedding:
+                current_original = head_embedding_original[i]
+                kmeans_gradient = 2 * (current_original - cluster_centers[label])
+                within_cluster_dist_squared = rdist(current_original, cluster_centers[label])
 
+            kmeans_penalty_value += lagrange * within_cluster_dist_squared
+
+            for d in range(dim):
+                current[d] -= alpha * lagrange * clip(kmeans_gradient[d])
+
+
+    kmeans_penalty[n + 1] = kmeans_penalty_value
+
+    # Calculate the cross entropy using edge and negative sampling
+    if cross_entropy_error is not None:
+        rng_state_cross_entropy_error_epoch_n = rng_state_copy.copy()
+        cross_entropy_error_value = 0.0
+        for i in numba.prange(epochs_per_sample.shape[0]):
+            if epoch_of_next_sample_copy[i] <= n:
+                j = head[i]
+                k = tail[i]
+                current = head_embedding[j]
+                other = tail_embedding[k]
+                dist_squared = rdist(current, other)
+
+                # Calculate the cross entropy for sampled edges (binary edges with positive weight = 1): attractive term for sampled edges, repulsive term is 0
+                if dist_squared > 0.0:
+                    cross_entropy_error_value += np.log(
+                        pow(1 + a * pow(dist_squared, b), -1)
+                    )
+                else:
+                    # If dist_squared = 0, attractive term is 0
+                    cross_entropy_error_value += 0
+
+                n_neg_samples = int(
+                    (n - epoch_of_next_negative_sample_copy[i]) / epochs_per_negative_sample[i]
+                )
+
+                # Calculate the cross entropy for edges with zero weight: attractive term is 0, repulsive term using negative sampling.
+                for p in range(n_neg_samples):
+                    k = tau_rand_int(rng_state_cross_entropy_error_epoch_n) % n_vertices
+                    other = tail_embedding[k]
+                    dist_squared = rdist(current, other)
+                    if dist_squared > 0.0:
+                        cross_entropy_error_value += np.log(
+                            1 - pow(1 + a * pow(dist_squared, b), -1)
+                        )
+                    else:
+                        # If dist_squared = 0, repulsive term uses epsilon = 0.001 to avoid Inf
+                        cross_entropy_error_value += np.log(
+                            1 - pow(1 + a * pow(dist_squared + 0.001, b), -1)
+                        )
+
+        cross_entropy_error[n + 1] = -1 * cross_entropy_error_value
+
+    # Calculate a more accurate cross entropy where many negative samples are included in computations
+    if cross_entropy_error_accurate is not None:
+        rng_state_cross_entropy_error_accurate_epoch_n = rng_state_copy.copy()
+        cross_entropy_error_accurate_value = 0.0
+        for i in numba.prange(epochs_per_sample.shape[0]):
+            j = head[i]
+            k = tail[i]
+            current = head_embedding[j]
+            other = tail_embedding[k]
+            dist_squared = rdist(current, other)
+
+            # Calculate the cross entropy for edges with positive weight : attractive term for positive weights, repulsive term for positive weights.
+            if dist_squared > 0.0:
+                cross_entropy_error_accurate_value += weight[i] * np.log(
+                    pow(1 + a * pow(dist_squared, b), -1)
+                ) + (1 - weight[i]) * np.log(
+                    1 - pow(1 + a * pow(dist_squared, b), -1)
+                )
+            else:
+                # If dist_squared = 0, attractive term is 0 and repulsive term uses epsilon = 0.001 to avoid Inf
+                cross_entropy_error_accurate_value += 0 + (1 - weight[i]) * np.log(
+                    1 - pow(1 + a * pow(dist_squared + 0.001, b), -1)
+                )
+
+            # Calculate the cross entropy for edges with zero weight: attractive term is 0, repulsive term using negative sampling.
+            for p in range(cross_entropy_error_accurate_n_neg_samples):
+                k = tau_rand_int(rng_state_cross_entropy_error_accurate_epoch_n) % n_vertices
+                other = tail_embedding[k]
+                dist_squared = rdist(current, other)
+                if dist_squared > 0.0:
+                    cross_entropy_error_accurate_value += 1 * np.log(
+                        1 - pow(1 + a * pow(dist_squared, b), -1)
+                    )
+                else:
+                    # If dist_squared = 0, repulsive term uses epsilon = 0.001 to avoid Inf
+
+                    cross_entropy_error_accurate_value += 1 * np.log(
+                        1 - pow(1 + a * pow(dist_squared + 0.001, b) , -1)
+                    )
+        cross_entropy_error_accurate[n + 1] = -1 * cross_entropy_error_accurate_value
 
 def _optimize_layout_euclidean_densmap_epoch_init(
     head_embedding,
