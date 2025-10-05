@@ -1852,15 +1852,36 @@ class UMAP(BaseEstimator):
         time care must be taken and dictionary elements must be ordered
         appropriately; this will hopefully be fixed in the future.
 
-    n_epochs: int (optional, default None)
+    n_epochs: int (optional, default None), or list of int
         The number of training epochs to be used in optimizing the
         low dimensional embedding. Larger values result in more accurate
         embeddings. If None is specified a value will be selected based on
         the size of the input dataset (200 for large datasets, 500 for small).
+        If a list of int is specified, the optimization will use the maximum
+        number of epochs in the list and then the intermediate embeddings at
+        the different epochs specified in that list are returned. When using
+        the projection pursuit clustering UMAP algorithm, intermediate
+        embeddings are also returned.
 
+    n_epoch_burnin: int
+        The number of epochs to use for burn-in of edge sampling. During the
+        burn-in period no optimization is performed.
+        
     learning_rate: float (optional, default 1.0)
         The initial learning rate for the embedding optimization.
 
+    learning_rate_decay: bool
+        Whether to decay the learning rate over the training epochs (similar to
+        simulated annealing). If set to True, the learning rate will decrease as
+        training progresses.
+    
+    gradient_using_prev_embedding: bool
+        Whether the gradient for each epoch is computed using the embedding
+        from the previous epoch (True) or the current embedding which has been
+        modified during the epoch (False). If set to False, the original UMAP
+        implementation is used, but setting it to True is more theoretically
+        correct.
+    
     init: string (optional, default 'spectral')
         How to initialize the low dimensional embedding. Options are:
 
@@ -1935,8 +1956,8 @@ class UMAP(BaseEstimator):
         ``spread``.
 
     random_state: int, RandomState instance or None, optional (default: None)
-        If int, random_state is the seed used by the random number generator;
-        If RandomState instance, random_state is the random number generator;
+        If int, ``random_state`` is the seed used by the random number generator;
+        If RandomState instance, ``random_state`` is the random number generator;
         If None, the random number generator is the RandomState instance used
         by `np.random`.
 
@@ -2025,17 +2046,94 @@ class UMAP(BaseEstimator):
         can also be used when densmap=False to calculate the densities for
         UMAP embeddings.
 
+    calculate_cross_entropy: bool (optional, default False)
+        Whether to calculate the cross entropy for each epoch and return the
+        resulting values. When using the projection pursuit clustering UMAP
+        algorithm, the resulting cross entropy values are also returned.
+
+    calculate_cross_entropy_accurate: bool (optional, default False)
+        Whether to calculate the accurate cross entropy for each epoch and return the
+        resulting values. When using the projection pursuit clustering UMAP
+        algorithm, the resulting accurate cross entropy values are also returned.
+
+    cross_entropy_error_accurate_n_neg_samples: int (optional, default 20)
+        The number of negative samples to use in the accurate cross entropy
+        calculations. Increasing this value will result in more accuracy.
+    
     clustering: bool (optional, default False)
-        Whether to use the Projection Pursuit Clustering UMAP Objective
+        Whether to use the Projection Pursuit Clustering UMAP algorithm. When
+        this is performed the optimized embeddings, kmeans penalty, cluster
+        assignments, cluster centers and inertia are returned.
 
     n_clusters: int (optional, default 5)
         The number of clusters
 
-    cluster_init: string (optional, default 'k-means')
-        The method for cluster initialization, which by default is 'k-means'. This is the recommended option so that
-        Projection Pursuit Clustering UMAP has a good starting point for the optimization. Alternatively, 'random' will
-        asssign each sample from the data a random cluster label. The value of ``random_state`` will be use
-        in the cluster initialization.
+    lagrange: float (optional, default 1), or list of float
+        The Lagrange multiplier for the clustering penalty term of the Projection
+        Pursuit Clustering UMAP algorithm. Increasing this value will asign more
+        importance to the clustering penalty term. If a list of float is specified,
+        then each lagrange in the list is an independent run of the entire Projection
+        Pursuit Clustering UMAP (PPC-UMAP) algorithm. Each lagrange starts with the
+        same initial cluster assignments and the same initial UMAP embedding. Depending
+        on ``cluster_cycles_start_from_init_embedding`` this initial embedding will
+        be reused for each cluster cycle (True) or used as the starting point for
+        cluster cycle one (False). Then, for each lagrange, the full clustering and
+        embedding optimization is performed, and the results are returned. These
+        independent runs allow for the assessment of the impact of the lagrange
+        multiplier on the clustering and embedding outcomes with respect to the same
+        initial cluster assignments and same initial UMAP embedding.
+    
+    learning_rate_clustering: float (optional, default 1)
+        Initial learning rate for the SGD during the cluster cycles of Projection
+        Pursuit Clustering UMAP algorithm
+
+    learning_rate_decay_clustering: bool (optional, default False)
+        Whether to decay the learning rate over the training epochs during the
+        cluster cycles (similar to simulated annealing). If set to True, the
+        learning rate will decrease as training progresses.
+
+    n_cluster_cycles: int (optional, default 2)
+        The number of cluster cycles to use for Projection Pursuit Clustering
+        UMAP algorithm. Each cycle alternates between optimizing the embedding
+        given cluster assignments and finding new cluster assignments given the
+        embedding. The results for each cycle are returned.
+    
+    cluster_cycles_start_from_init_embedding: bool (optional, default False)
+        Whether the optimization for each cluster cycle should restart from the
+        initial embedding (True). Alternatively, the optimization should
+        continue from the embedding at the end of the previous cycle, which in
+        the case of the first cluster cycle would be the final umap embedding (False).
+
+    cluster_init: string (optional, default 'kmeans++')
+        The method for cluster initialization. The options are:
+            * 'kmeans': Choose ``n_clusters`` observations at random from the
+                data for the initial centroids. Then, the k-means algorithm is
+                run with these initial centroids.
+            * 'kmeans++': Selects initial cluster centroids using sampling based
+                on an empirical probability distribution of the points' contribution
+                to the overall inertia. Then, the k-means algorithm is run with
+                these initial centroids.
+            * 'random': Assign each observation to a random cluster using a uniform
+                distribution. Cluster centers are then computed as the mean of
+                the points assigned.
+        The value of ``random_state`` will be used in the cluster initialization.
+    
+    number_initial_clustering_runs: int (optional, default 1)
+        The number of independent runs of the entire Projection Pursuit Clustering
+        UMAP (PPC-UMAP) algorithm. Each run starts with a different random cluster
+        initialization, but the same initial UMAP embedding. Depending on
+        ``cluster_cycles_start_from_init_embedding`` this initial embedding will
+        be reused for each cluster cycle (True) or used as the starting point for
+        cluster cycle one (False). Then, for each run, the full clustering and
+        embedding optimization is performed, and the results are stored. These
+        independent runs allow for the assessment of the stability and variability
+        of the clustering and embedding outcomes with respect to different initial
+        cluster assignments, but with the same initial UMAP embedding.
+
+    kmeans_n_init: int (optional, default None)
+        Number of times the k-means algorithm will be run with different centroid
+        seeds. The final results will be the best output of ``kmeans_n_init``
+        consecutive runs in terms of inertia.
 
     disconnection_distance: float (optional, default np.inf or maximal value for bounded distances)
         Disconnect any vertices of distance greater than or equal to disconnection_distance when approximating the
