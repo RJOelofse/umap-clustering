@@ -493,6 +493,7 @@ def points(
     show_legend=True,
     subset_points=None,
     ax=None,
+    use_datashader=True,
     alpha=None,
 ):
     """Plot an embedding as points. Currently this only works
@@ -659,7 +660,7 @@ def points(
         fig = plt.figure(figsize=(width / dpi, height / dpi))
         ax = fig.add_subplot(111)
 
-    if points.shape[0] <= width * height // 10:
+    if points.shape[0] <= width * height // 10 or not use_datashader:
         ax = _matplotlib_points(
             points,
             ax,
