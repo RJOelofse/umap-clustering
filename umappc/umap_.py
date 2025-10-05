@@ -2791,6 +2791,123 @@ class UMAP(BaseEstimator):
                                    - False: accepts np.inf, np.nan, pd.NA in array.
                                    - 'allow-nan': accepts only np.nan and pd.NA values in array.
                                      Values cannot be infinite.
+        
+        Returns
+        -------
+        self : object
+            Returns the fitted estimator.
+
+        Attributes set on the instance
+        -----------------------------
+        embedding_ : array of shape (n_samples, n_components)
+            The optimized ``n_components``-dimensional representation of the input
+            data ``X``. When using the Projection Pursuit Clustering UMAP algorithm,
+            this attribute will only be the final embedding after all cluster cycles,
+            if there is at most one ``number_initial_clustering_runs`` and one
+            ``lagrange``. If there are more than one ``number_initial_clustering_runs``
+            or ``lagrange`` values, then other attributes will contain the relevant
+            embeddings.
+
+        embedding_list_ : list, optional
+            List of intermediate embeddings at specified epochs, if ``n_epochs`` is
+            a list. Furthermore, if zero is included in that list then the initial
+            embedding before optimization is also included.
+        
+        init_embedding : array of shape (n_samples, n_components)
+            The initial embedding before optimization is performed.
+
+        rad_orig_ : array of shape (n_samples,), optional
+            Local radii in the original data, if densMAP extension is turned on.
+
+        rad_emb_ : array of shape (n_samples,), optional
+            Local radii in the embedding space, if densMAP extension is turned on.
+
+        cross_entropy_error : array of shape (n_epochs - n_epoch_burnin + 1,), optional
+            Array of cross entropy errors per epoch, if ``calculate_cross_entropy``
+            is True. The first entry (index 0) corresponds to the cross entropy
+            after the burn-in period (if specified) and before any training.
+
+        cross_entropy_error_accurate : array of shape (n_epochs - n_epoch_burnin + 1,), optional
+            Array of accurate cross entropy errors per epoch, if ``calculate_cross_entropy_accurate``
+            is True. The first entry (index 0) corresponds to the accurate cross entropy
+            after the burn-in period (if specified) and before any training.
+
+        final_umap_embedding : array of shape (n_samples, n_components), optional
+            The final UMAP embedding before the Projection Pursuit Clustering UMAP
+            algorithm, if ``clustering`` is True.
+
+        embedding_list_clustering : list, optional
+            Nested list of embeddings for each clustering run, lagrange value, and cluster
+            cycle, if ``clustering`` is True. The leaf nodes of the nested list, are the
+            same as described above for ``embedding_list``.
+
+        cross_entropy_error_clustering : list, optional
+            Nested list of cross entropy errors for each clustering run, lagrange value,
+            and cluster cycle, if ``calculate_cross_entropy`` is True and ``clustering``
+            is True. The leaf nodes of the nested list, are the same as described above
+            for ``cross_entropy_error``.
+
+        cross_entropy_error_accurate_clustering : list, optional
+            Nested list of accurate cross entropy errors for each clustering run, lagrange
+            value, and cluster cycle, if ``calculate_cross_entropy_accurate`` is True and
+            ``clustering`` is True. The leaf nodes of the nested list, are the same as
+            described above for ``cross_entropy_error_accurate``.
+
+        kmeans_penalty : list, optional
+            Nested list of k-means penalties for each clustering run, lagrange value, and
+            cluster cycle, if ``clustering`` is True. The leaf nodes of the nested list,
+            are an array of k-means penalties with length ``n_epochs - n_epoch_burnin + 1``.
+            The first entry (index 0) of this array corresponds to the k-means penalty after
+            the burn-in period (if specified) and before any training.
+
+        cluster_labels : list, optional
+            Nested list of cluster labels for each clustering run, lagrange value, and
+            cluster cycle, if ``clustering`` is True. The leaf nodes of the nested list,
+            are a list of cluster labels found from optimizing the clustering at the end
+            of a given cluster cycle.
+
+        cluster_centers : list, optional
+            Nested list of cluster centers for each clustering run, lagrange value, and
+            cluster cycle, if ``clustering`` is True. The leaf nodes of the nested list,
+            are a list of cluster centers found from optimizing the clustering at the end
+            of a given cluster cycle.
+
+        inertia : list, optional
+            Nested list of inertia values for each clustering run, lagrange value, and
+            cluster cycle, if ``clustering`` is True. The leaf nodes of the nested list,
+            is the inertia value found from optimizing the clustering at the end of a
+            given cluster cycle.
+
+        Structure of nested list attributes:
+        -----------------------------
+        Outermost list:
+            One inner list per clustering run, with ``number_initial_clustering_runs``
+            inner lists.
+
+        Second level list:
+            One inner list per lagrange value, with length of ``lagrange`` inner
+            lists. However, for outputs ``cluster_labels``, ``cluster_centers`` and
+            ``inertia``, there is an additional inner list at index 0 containing
+            the results for the initial clustering before any lagranges and their
+            corresponding cluster cycles.
+        
+        Third level list:
+            One entry (float, array or inner list) per cluster cycle, with
+            ``n_cluster_cycles`` entries
+        
+        Leaf node:
+            Leaf node contains a float, array or inner list for this cluster cycle:
+                * For ``embedding_list_clustering``: a list of intermediate embeddings
+                    at specified epochs, if ``n_epochs`` is a list.
+                * For ``cross_entropy_error_clustering``: array of cross entropy errors
+                    per epoch, with length ``n_epochs - n_epoch_burnin + 1``
+                * For ``cross_entropy_error_accurate_clustering``: array of accurate cross
+                    entropy errors per epoch, with length ``n_epochs - n_epoch_burnin + 1``
+                * For ``kmeans_penalty``: array of k-means penalties per epoch, with length
+                    ``n_epochs - n_epoch_burnin + 1``
+                * For ``cluster_labels``: array of cluster labels with length n_samples
+                * For ``cluster_centers``: array of cluster centers with shape (n_clusters, n_components)
+                * For ``inertia``: inertia value of the clustering
         """
 
         X = check_array(X, dtype=np.float32, accept_sparse="csr", order="C", force_all_finite=force_all_finite)
