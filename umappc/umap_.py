@@ -982,13 +982,20 @@ def simplicial_set_embedding(
     """Perform a fuzzy simplicial set embedding, using a specified
     initialisation method and then minimizing the fuzzy set cross entropy
     between the 1-skeletons of the high and low dimensional fuzzy simplicial
-    sets.
+    sets. When using the projection pursuit clustering UMAP algorithm, the fuzzy
+    set cross entropy is extended to include a clustering penalty term.
 
     Parameters
     ----------
     data: array of shape (n_samples, n_features)
         The source data to be embedded by UMAP.
 
+    response: array of shape (n_samples,) or None
+        When using the projection pursuit clustering UMAP algorithm the response
+        variable (i.e. the true cluster labels) can be provided. This enables
+        supervised clustering and allows the output to serve as a benchmark for
+        evaluating the real-world performance of unsupervised clustering.
+    
     graph: sparse matrix
         The 1-skeleton of the high dimensional fuzzy simplicial set as
         represented by a graph for which we require a sparse matrix for the
@@ -1000,6 +1007,18 @@ def simplicial_set_embedding(
     initial_alpha: float
         Initial learning rate for the SGD.
 
+    learning_rate_decay: bool
+        Whether to decay the learning rate over the training epochs (similar to
+        simulated annealing). If set to True, the learning rate will decrease as
+        training progresses.
+
+    gradient_using_prev_embedding: bool
+        Whether the gradient for each epoch is computed using the embedding
+        from the previous epoch (True) or the current embedding which has been
+        modified during the epoch (False). If set to False, the original UMAP
+        implementation is used, but setting it to True is more theoretically
+        correct.
+    
     a: float
         Parameter of differentiable approximation of right adjoint functor
 
@@ -1020,16 +1039,22 @@ def simplicial_set_embedding(
         low dimensional embedding. Larger values result in more accurate
         embeddings. If 0 is specified a value will be selected based on
         the size of the input dataset (200 for large datasets, 500 for small).
-        If a list of int is specified, then the intermediate embeddings at the
-        different epochs specified in that list are returned in
-        ``aux_data["embedding_list"]``.
+        If a list of int is specified, the optimization will use the maximum
+        number of epochs in the list and then the intermediate embeddings at
+        the different epochs specified in that list are returned in
+        ``aux_data['embedding_list']``. When using the projection pursuit
+        clustering UMAP algorithm, intermediate embeddings are also returned
+        in the auxiliary output (see ``aux_data`` for more details).
 
+    n_epoch_burnin: int
+        The number of epochs to use for burn-in of edge sampling. During the
+        burn-in period no optimization is performed.
+    
     init: string
         How to initialize the low dimensional embedding. Options are:
-
             * 'spectral': use a spectral embedding of the fuzzy 1-skeleton
             * 'random': assign initial embedding positions at random.
-            * 'pca': use the first n_components from PCA applied to the input data.
+            * 'pca': use the first ``n_components`` from PCA applied to the input data.
             * A numpy array of initial embedding positions.
 
     random_state: numpy RandomState or equivalent
@@ -1053,21 +1078,102 @@ def simplicial_set_embedding(
     output_dens: bool
         Whether to output local radii in the original data and the embedding.
 
-    clustering: bool (optional, default False)
-        Whether to use the Projection Pursuit Clustering UMAP objective function
-        to optimize the embedding according to the Projection Pursuit Clustering
-        UMAP algorithm. When this is performed the cluster assignments are returned
-        in ``aux_data["clusters"]``, which contains an array of Int
+    calculate_cross_entropy: bool (optional, default False)
+        Whether to calculate the cross entropy for each epoch. The resulting
+        values are returned in ``aux_data['cross_entropy']``. When using the
+        projection pursuit clustering UMAP algorithm, the resulting values are
+        also returned in the auxiliary output (See ``aux_data`` for more details).
 
+    calculate_cross_entropy_accurate: bool (optional, default False)
+        Whether to calculate a more accurate cross entropy for each epoch.
+        The resulting values are returned in ``aux_data['cross_entropy_accurate']``.
+        When using the projection pursuit clustering UMAP algorithm, the resulting
+        values are also returned in the auxiliary output (See ``aux_data`` for
+        more details).
+
+    cross_entropy_error_accurate_n_neg_samples: int (optional, default 20)
+        The number of negative samples to use in the accurate cross entropy
+        calculations. Increasing this value will result in more accuracy.
+
+    clustering: bool (optional, default False)
+        Whether to use the Projection Pursuit Clustering UMAP algorithm. When
+        this is performed the optimized embeddings, kmeans penalty, cluster
+        assignments, cluster centers and inertia are returned in the auxiliary
+        output (See ``aux_data`` for more details).
+    
     n_clusters: int (optional, default 5)
         The number of clusters
 
-    cluster_init: string (optional, default 'k-means')
-        The method for cluster initialization, which by default is 'k-means'. This is the recommended option so that
-        Projection Pursuit Clustering UMAP has a good starting point for the optimization. Alternatively, 'random' will
-        asssign each sample from the data a random cluster label. The value of ``random_state`` will be used
-        in the cluster initialization.
+    lagrange: float (optional, default 1), or list of float
+        The Lagrange multiplier for the clustering penalty term of the Projection
+        Pursuit Clustering UMAP algorithm. Increasing this value will asign more
+        importance to the clustering penalty term. If a list of float is specified,
+        then each lagrange in the list is an independent run of the entire Projection
+        Pursuit Clustering UMAP (PPC-UMAP) algorithm. Each lagrange starts with the
+        same initial cluster assignments and the same initial UMAP embedding. Depending
+        on ``cluster_cycles_start_from_init_embedding`` this initial embedding will
+        be reused for each cluster cycle (True) or used as the starting point for
+        cluster cycle one (False). Then, for each lagrange, the full clustering and
+        embedding optimization is performed, and results are returned in the auxiliary
+        output (See ``aux_data`` for more details). These independent runs allow
+        for the assessment of the impact of the lagrange multiplier on the clustering
+        and embedding outcomes with respect to the same initial cluster assignments
+        and same initial UMAP embedding.
+    
+    learning_rate_clustering: float (optional, default 1)
+        Initial learning rate for the SGD during the cluster cycles of Projection
+        Pursuit Clustering UMAP algorithm
 
+    learning_rate_decay_clustering: bool (optional, default False)
+        Whether to decay the learning rate over the training epochs during the
+        cluster cycles (similar to simulated annealing). If set to True, the
+        learning rate will decrease as training progresses.
+
+    n_cluster_cycles: int (optional, default 2)
+        The number of cluster cycles to use for Projection Pursuit Clustering
+        UMAP algorithm. Each cycle alternates between optimizing the embedding
+        given cluster assignments and finding new cluster assignments given the
+        embedding. The results for each cycle are returned in the auxiliary output
+        (See ``aux_data`` for more details).
+    
+    cluster_cycles_start_from_init_embedding: bool (optional, default False)
+        Whether the optimization for each cluster cycle should restart from the
+        initial embedding (True). Alternatively, the optimization should
+        continue from the embedding at the end of the previous cycle, which in
+        the case of the first cluster cycle would be the final umap embedding (False).
+
+    cluster_init: string (optional, default 'kmeans++')
+        The method for cluster initialization. The options are:
+            * 'kmeans': Choose ``n_clusters`` observations at random from the
+                data for the initial centroids. Then, the k-means algorithm is
+                run with these initial centroids.
+            * 'kmeans++': Selects initial cluster centroids using sampling based
+                on an empirical probability distribution of the points' contribution
+                to the overall inertia. Then, the k-means algorithm is run with
+                these initial centroids.
+            * 'random': Assign each observation to a random cluster using a uniform
+                distribution. Cluster centers are then computed as the mean of
+                the points assigned.
+        The value of ``random_state`` will be used in the cluster initialization.
+    
+    number_initial_clustering_runs: int (optional, default 1)
+        The number of independent runs of the entire Projection Pursuit Clustering
+        UMAP (PPC-UMAP) algorithm. Each run starts with a different random cluster
+        initialization, but the same initial UMAP embedding. Depending on
+        ``cluster_cycles_start_from_init_embedding`` this initial embedding will
+        be reused for each cluster cycle (True) or used as the starting point for
+        cluster cycle one (False). Then, for each run, the full clustering and
+        embedding optimization is performed, and results are stored in the auxiliary
+        output (See ``aux_data`` for more details). These independent runs allow
+        for the assessment of the stability and variability of the clustering and
+        embedding outcomes with respect to different initial cluster assignments,
+        but with the same initial UMAP embedding.
+
+    kmeans_n_init: int (optional, default None)
+        Number of times the k-means algorithm will be run with different centroid
+        seeds. The final results will be the best output of ``kmeans_n_init``
+        consecutive runs in terms of inertia.
+    
     output_metric: function
         Function returning the distance between two points in embedding space and
         the gradient of the distance wrt the first argument.
@@ -1093,15 +1199,85 @@ def simplicial_set_embedding(
     -------
     embedding: array of shape (n_samples, n_components)
         The optimized of ``graph`` into an ``n_components`` dimensional
-        euclidean space.
+        euclidean space. When using the Projection Pursuit Clustering UMAP algorithm,
+        this output will only be the final embedding after all cluster cycles, if
+        there is at most one ``number_initial_clustering_runs`` and one ``lagrange``.
+        If there are more than one ``number_initial_clustering_runs`` or ``lagrange``
+        values, the Auxiliary output will contain the relevant embeddings.
 
     aux_data: dict
-        Auxiliary output returned with the embedding. When densMAP extension
-        is turned on, this dictionary includes local radii in the original
-        data (``rad_orig``) and in the embedding (``rad_emb``). When clustering is
-        performed, the dictionary includes the cluster labels (``cluster_labels``)
-        and cluster centers labels (``cluster_centers``).
-
+        Auxiliary output returned with the embedding process:
+            * 'init_embedding': The initial embedding before optimization is performed.
+            * 'embedding_list': List of intermediate embeddings at specified epochs, if
+                ``n_epochs`` is a list. Furthermore, if zero is included in that list
+                then the initial embedding before optimization is also included.
+            * 'rad_orig': Local radii in the original data if densMAP extension is
+                turned on.
+            * 'rad_emb': Local radii in the embedding if densMAP extension is turned on.
+            * 'cross_entropy_error': Array of cross entropy errors per epoch, with length
+                ``n_epochs - n_epoch_burnin + 1``, if ``calculate_cross_entropy`` is True.
+                The first entry (index 0) corresponds to the cross entropy after the
+                burn-in period (if specified) and before any training.
+            * 'cross_entropy_error_accurate': Array of accurate cross entropy errors per
+                epoch, with length ``n_epochs - n_epoch_burnin + 1``, if
+                ``calculate_cross_entropy_accurate`` is True. The first entry (index 0)
+                corresponds to the accurate cross entropy after the burn-in period
+                (if specified) and before any training.
+        
+        The next auxiliary outputs are only returned when using the Projection
+        Pursuit Clustering UMAP algorithm (``clustering`` is True):
+            * 'final_umap_embedding': The final UMAP embedding before the Projection
+                Pursuit Clustering UMAP algorithm.
+            * 'embedding_list_clustering': Nested list of embeddings for each clustering
+                run, lagrange value, and cluster cycle. The leaf nodes of the nested list,
+                are the same as described above for ``embedding_list``.
+            * 'cross_entropy_error_clustering': Nested list of cross entropy errors for
+                each clustering run, lagrange value, and cluster cycle, if
+                ``calculate_cross_entropy`` is True. The leaf nodes of the nested list,
+                are the same as described above for ``cross_entropy_error``.
+            * 'cross_entropy_error_accurate_clustering': Nested list of accurate cross
+                entropy errors for each clustering run, lagrange value, and cluster cycle,
+                if ``calculate_cross_entropy_accurate`` is True. The leaf nodes of the
+                nested list, are the same as described above for ``cross_entropy_error_accurate``.
+            * 'kmeans_penalty': Nested list of k-means penalties for each clustering run,
+                lagrange value, and cluster cycle. The leaf nodes of the nested list, are
+                an array of k-means penalties with length ``n_epochs - n_epoch_burnin + 1``.
+                The first entry (index 0) of this array corresponds to the k-means penalty
+                after the burn-in period (if specified) and before any training.
+            * 'cluster_labels': Nested list of cluster labels for each clustering run,
+                lagrange value, and cluster cycle. The leaf nodes of the nested list, are
+                a list of cluster labels found from optimizing the clustering at the end
+                of a given cluster cycle.
+            * 'cluster_centers': Nested list of cluster centers for each clustering run,
+                lagrange value, and cluster cycle. The leaf nodes of the nested list, are
+                a list of cluster centers found from optimizing the clustering at the end
+                of a given cluster cycle.
+            * 'inertia': Nested list of inertia values for each clustering run, lagrange
+                value, and cluster cycle. The leaf nodes of the nested list, is the inertia
+                value found from optimizing the clustering at the end of a given cluster cycle.
+        
+        The structure of the nested list is as follows:
+            * Outermost list: one inner list per clustering run, with
+                ``number_initial_clustering_runs`` inner lists.
+            * Second level list: one inner list per lagrange value, with length of
+                ``lagrange`` inner lists. However, for outputs 'cluster_labels', 'cluster_centers'
+                and 'inertia', there is an additional inner list at index 0 containing the
+                results for the initial clustering before any lagranges and their
+                corresponding cluster cycles.
+            * Third level list: one entry (float, array or inner list) per cluster cycle, with
+                ``n_cluster_cycles`` entries
+            * Leaf node contains a float, array or inner list for this cluster cycle:
+                * For 'embedding_list_clustering': a list of intermediate embeddings at
+                    specified epochs, if ``n_epochs`` is a list.
+                * For 'cross_entropy_error_clustering': array of cross entropy errors per
+                    epoch, with length ``n_epochs - n_epoch_burnin + 1``
+                * For 'cross_entropy_error_accurate_clustering': array of accurate cross
+                    entropy errors per epoch, with length ``n_epochs - n_epoch_burnin + 1``
+                * For 'kmeans_penalty': array of k-means penalties per epoch, with length
+                    ``n_epochs - n_epoch_burnin + 1``
+                * For 'cluster_labels': array of cluster labels with length n_samples
+                * For 'cluster_centers': array of cluster centers with shape (n_clusters, n_components)
+                * For 'inertia': inertia value of the clustering
     """
     graph = graph.tocoo()
     graph.sum_duplicates()
