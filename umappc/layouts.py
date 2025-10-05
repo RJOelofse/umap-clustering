@@ -484,7 +484,10 @@ def optimize_layout_euclidean(
     fuzzy set cross entropy between the 1-skeletons of the high dimensional
     and low dimensional fuzzy simplicial sets. In practice this is done by
     sampling edges based on their membership strength (with the (1-p) terms
-    coming from negative sampling similar to word2vec).
+    coming from negative sampling similar to word2vec). In addition, when
+    using the projection pursuit clustering UMAP algorithm, a kmeans
+    penalty term is also included in the optimization.
+
     Parameters
     ----------
     head_embedding: array of shape (n_samples, n_components)
@@ -498,36 +501,49 @@ def optimize_layout_euclidean(
         The indices of the heads of 1-simplices with non-zero membership.
     tail: array of shape (n_1_simplices)
         The indices of the tails of 1-simplices with non-zero membership.
+    weight: array of shape (n_1_simplices)
+        The weights of each 1-simplex.
     n_epochs: int, or list of int
         The number of training epochs to use in optimization, or a list of
         epochs at which to save the embedding. In case of a list, the optimization
         will use the maximum number of epochs in the list, and will return a list
         of embedding in the order of increasing epoch, regardless of the order in
         the epoch list.
+    n_epoch_burnin: int
+        The number of epochs to use for burn-in of edge sampling.
     n_vertices: int
         The number of vertices (0-simplices) in the dataset.
     epochs_per_sample: array of shape (n_1_simplices)
         A float value of the number of epochs per 1-simplex. 1-simplices with
         weaker membership strength will have more epochs between being sampled.
     a: float
-        Parameter of differentiable approximation of right adjoint functor
+        Parameter of differentiable approximation of right adjoint functor.
     b: float
-        Parameter of differentiable approximation of right adjoint functor
+        Parameter of differentiable approximation of right adjoint functor.
     rng_state: array of int64, shape (3,)
-        The internal state of the rng
+        The internal state of the rng.
+    calculate_cross_entropy: bool (optional, default False)
+        Whether to calculate the cross entropy for each epoch.
+    calculate_cross_entropy_accurate: bool (optional, default False)
+        Whether to calculate a more accurate cross entropy for each epoch.
+    cross_entropy_error_accurate_n_neg_samples: int (optional, default 20)
+        The number of negative samples to use in the accurate cross entropy
+        calculations. Increasing this value will result in more accuracy.
+    cluster_labels: array of shape (n_samples,) (optional, default None)
+        The cluster labels for each sample point / vertex
+    cluster_centers: array of shape (n_clusters, n_components) (optional, default None)
+        The cluster centers for each cluster
     clustering: bool (optional, default False)
-        Whether to use the Projection Pursuit Clustering UMAP Objective
-    cluster_init: string (optional, default 'k-means')
-        The method for cluster initialization, which by default is 'k-means'. This is the recommended option so that
-        Projection Pursuit Clustering UMAP has a good starting point for the optimization. Alternatively, 'random' will
-        asssign each sample from the data a random cluster label. The value of ``rng_state`` will be used
-        in the cluster initialization.
-    n_clusters: int (optional, default 5)
-        The number of clusters
+        Whether to use the Projection Pursuit Clustering UMAP algorithm.
+    lagrange: float (optional, default 1)
+        The Lagrange multiplier for the clustering penalty term of the
+        Projection Pursuit Clustering UMAP algorithm.
     gamma: float (optional, default 1.0)
         Weight to apply to negative samples.
     initial_alpha: float (optional, default 1.0)
         Initial learning rate for the SGD.
+    learning_rate_decay: bool (optional, default True)
+        Whether to use learning rate decay.
     negative_sample_rate: int (optional, default 5)
         Number of negative samples to use per positive sample.
     parallel: bool (optional, default False)
@@ -537,24 +553,31 @@ def optimize_layout_euclidean(
     verbose: bool (optional, default False)
         Whether to report information on the current progress of the algorithm.
     densmap: bool (optional, default False)
-        Whether to use the density-augmented densMAP objective
+        Whether to use the density-augmented densMAP objective.
     densmap_kwds: dict (optional, default None)
-        Auxiliary data for densMAP
+        Auxiliary data for densMAP.
     tqdm_kwds: dict (optional, default None)
         Keyword arguments for tqdm progress bar.
     move_other: bool (optional, default False)
-        Whether to adjust tail_embedding alongside head_embedding
+        Whether to adjust tail_embedding alongside head_embedding.
+
     Returns
     -------
     embedding: array of shape (n_samples, n_components)
-        The optimized embedding.
-
-    aux_data_optimization: dict
-        Auxiliary output returned with the optimized embedding. When clustering is
-        performed, the dictionary includes the cluster labels (``cluster_labels``)
-        and cluster centers labels (``cluster_centers``).
+        The optimized embedding
+    cross_entropy_error array of shape (n_epochs + 1)
+        The cross entropy errors for each training epoch. The first entry (index 0)
+        corresponds to the cross entropy after the burn-in period (if specified)
+        and before any training.
+    cross_entropy_error_accurate array of shape (n_epochs + 1)
+        The accurate cross entropy errors for each training epoch. The first entry (index 0)
+        corresponds to the accurate cross entropy after the burn-in period (if specified)
+        and before any training.
+    kmeans_penalty array of shape (n_epochs + 1)
+        The kmeans penalty for each training epoch. The first entry (index 0)
+        corresponds to the kmeans penalty after the burn-in period (if specified)
+        and before any training. Only returned when ``clustering`` is True.
     """
-
     dim = head_embedding.shape[1]
     alpha = initial_alpha
     if cluster_labels is None:
