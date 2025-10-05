@@ -1894,7 +1894,10 @@ class UMAP(BaseEstimator):
         output_metric="euclidean",
         output_metric_kwds=None,
         n_epochs=None,
+        n_epoch_burnin=0,
         learning_rate=1.0,
+        learning_rate_decay=True,
+        gradient_using_prev_embedding=False,
         init="spectral",
         min_dist=0.1,
         spread=1.0,
@@ -1924,8 +1927,17 @@ class UMAP(BaseEstimator):
         dens_frac=0.3,
         dens_var_shift=0.1,
         output_dens=False,
+        calculate_cross_entropy=False,
+        calculate_cross_entropy_accurate=False,
+        cross_entropy_error_accurate_n_neg_samples=20,
         clustering=False,
-        cluster_init="kmeans",
+        learning_rate_clustering=1.0,
+        learning_rate_decay_clustering=True,
+        n_cluster_cycles=2,
+        cluster_cycles_start_from_init_embedding=False,
+        cluster_init="kmeans++",
+        number_initial_clustering_runs=1,
+        kmeans_n_init=None,
         n_clusters=5,
         lagrange=1,
         disconnection_distance=None,
@@ -1938,10 +1950,13 @@ class UMAP(BaseEstimator):
         self.metric_kwds = metric_kwds
         self.output_metric_kwds = output_metric_kwds
         self.n_epochs = n_epochs
+        self.n_epoch_burnin = n_epoch_burnin
         self.init = init
         self.n_components = n_components
         self.repulsion_strength = repulsion_strength
         self.learning_rate = learning_rate
+        self.learning_rate_decay = learning_rate_decay
+        self.gradient_using_prev_embedding = gradient_using_prev_embedding
 
         self.spread = spread
         self.min_dist = min_dist
@@ -1968,8 +1983,19 @@ class UMAP(BaseEstimator):
         self.dens_frac = dens_frac
         self.dens_var_shift = dens_var_shift
         self.output_dens = output_dens
+
+        self.calculate_cross_entropy = calculate_cross_entropy
+        self.calculate_cross_entropy_accurate = calculate_cross_entropy_accurate
+        self.cross_entropy_error_accurate_n_neg_samples = cross_entropy_error_accurate_n_neg_samples
+
         self.clustering = clustering
+        self.learning_rate_clustering = learning_rate_clustering
+        self.learning_rate_decay_clustering = learning_rate_decay_clustering
+        self.n_cluster_cycles = n_cluster_cycles
+        self.cluster_cycles_start_from_init_embedding = cluster_cycles_start_from_init_embedding
         self.cluster_init = cluster_init
+        self.number_initial_clustering_runs = number_initial_clustering_runs
+        self.kmeans_n_init = kmeans_n_init
         self.n_clusters = n_clusters
         self.lagrange = lagrange
         self.disconnection_distance = disconnection_distance
@@ -2178,6 +2204,9 @@ class UMAP(BaseEstimator):
 
         if self.n_jobs < -1 or self.n_jobs == 0:
             raise ValueError("n_jobs must be a postive integer, or -1 (for all cores)")
+        if self.n_jobs != 1 and self.random_state is not None:
+            self.n_jobs = 1
+            warn(f"n_jobs value {self.n_jobs} overridden to 1 by setting random_state. Use no seed for parallelism.")
 
         if self.dens_lambda < 0.0:
             raise ValueError("dens_lambda cannot be negative")
