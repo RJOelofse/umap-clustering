@@ -2686,8 +2686,8 @@ class UMAP(BaseEstimator):
 
         if not isinstance(self.cluster_init, str):
             raise TypeError("cluster_init must be a string")
-        if not self.cluster_init in ["kmeans","random"]:
-            raise ValueError("cluster_init must be 'kmeans' or 'random'")
+        if not self.cluster_init in ["kmeans","kmeans++","random"]:
+            raise ValueError("cluster_init must be 'kmeans', 'kmeans++' or 'random'")
 
         if self.verbose:
             print(ts(), "Construct fuzzy simplicial set")
@@ -2904,7 +2904,7 @@ class UMAP(BaseEstimator):
 
         # Currently not checking if any duplicate points have differing labels
         # Might be worth throwing a warning...
-        if y is not None:
+        if y is not None and not self.clustering:
             len_X = len(X) if not self._sparse_data else X.shape[0]
             if len_X != len(y):
                 raise ValueError(
@@ -3007,6 +3007,16 @@ class UMAP(BaseEstimator):
                 self.graph_ = reset_local_connectivity(self.graph_)
             self._supervised = True
         else:
+            self.y_ = None
+            if y is not None and self.clustering:
+                len_X = X.shape[0]
+                if len_X != len(y):
+                    raise ValueError(
+                        "Length of x = {len_x}, length of y = {len_y}, while it must be equal.".format(
+                            len_x=len_X, len_y=len(y)
+                        )
+                    )
+                self.y_ = y[index]
             self._supervised = False
 
         if self.densmap or self.output_dens:
@@ -3038,6 +3048,11 @@ class UMAP(BaseEstimator):
                         e[inverse] for e in aux_data["embedding_list"]
                     ]
 
+            if self.calculate_cross_entropy:
+                self.cross_entropy_error = aux_data["cross_entropy_error"]
+            if self.calculate_cross_entropy_accurate:
+                self.cross_entropy_error_accurate = aux_data["cross_entropy_error_accurate"]
+
             # Assign any points that are fully disconnected from our manifold(s) to have embedding
             # coordinates of np.nan.  These will be filtered by our plotting functions automatically.
             # They also prevent users from being deceived a distance query to one of these points.
@@ -3049,13 +3064,32 @@ class UMAP(BaseEstimator):
                 )
 
             self.embedding_ = self.embedding_[inverse]
+
+            self.init_embedding = aux_data["init_embedding"][inverse]
+
             if self.output_dens:
                 self.rad_orig_ = aux_data["rad_orig"][inverse]
                 self.rad_emb_ = aux_data["rad_emb"][inverse]
 
             if self.clustering:
+                self.final_umap_embedding = aux_data["final_umap_embedding"]
+
+                # previously for `embedding_list_` or `embedding_` we used `inverse` to map from our
+                # internal structures to the input data when unique=True, this mapping is not currently
+                # supported for `embedding_list_clustering`
+                self.embedding_list_clustering = aux_data["embedding_list_clustering"]
+
+                if self.calculate_cross_entropy:
+                    self.cross_entropy_error_clustering = aux_data["cross_entropy_error_clustering"]
+                if self.calculate_cross_entropy_accurate:
+                    self.cross_entropy_error_accurate_clustering = aux_data["cross_entropy_error_accurate_clustering"]
+
+                self.kmeans_penalty = aux_data["kmeans_penalty"]
+
+                # the `inverse` mapping is not currently supported for `cluster_labels`
                 self.cluster_labels = aux_data["cluster_labels"]
                 self.cluster_centers = aux_data["cluster_centers"]
+                self.inertia = aux_data["inertia"]
 
         if self.verbose:
             print(ts() + " Finished embedding")
