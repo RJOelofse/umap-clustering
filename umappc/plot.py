@@ -1623,3 +1623,60 @@ def nearest_neighbour_distribution(umap_object, bins=25, ax=None):
     ax.hist(nn_distances, bins=bins)
 
     return ax
+
+## This function is a refactoring of the voronoi diagram example from the scikit-learn documentation
+## https://scikit-learn.org/stable/auto_examples/cluster/plot_kmeans_digits.html#visualize-the-results-on-pca-reduced-data
+def plot_kmeans_voronoi_cells(
+    axes: matplotlib.axes.Axes,
+    embedding: np.ndarray,
+    n_clusters: int,
+    cluster_centers: np.ndarray,
+    kmeans_model = None,
+    padding: float = 0.1,
+    contour_line_width: float = 1.0,
+    contour_line_style: str = "-",
+    cluster_center_marking_size: int = 169,
+    cluster_center_line_width: float = 3.0,
+):
+    # Step size of the mesh. Decrease to increase the quality of the VQ.
+    h = 0.02  # point in the mesh [x_min, x_max]x[y_min, y_max].
+    # Plot the decision boundary. For that, we will assign a color to each
+    x_range = embedding[:, 0].max() - embedding[:, 0].min()
+    y_range = embedding[:, 1].max() - embedding[:, 1].min()
+    x_min, x_max = embedding[:, 0].min() - padding*x_range, embedding[:, 0].max() + padding*x_range
+    y_min, y_max = embedding[:, 1].min() - padding*y_range, embedding[:, 1].max() + padding*y_range
+    xx, yy = np.meshgrid(np.arange(x_min, x_max, h), np.arange(y_min, y_max, h))
+    grid = np.c_[xx.ravel(), yy.ravel()]
+    if kmeans_model is None:
+        # Assign each grid point to the nearest center using the squared Euclidean distance
+        d2 = ((grid[:, None, :] - cluster_centers[None, :, :]) ** 2).sum(axis=2)
+        Z = np.argmin(d2, axis=1)
+    else:
+        # Obtain labels for each point in mesh. Use last trained kmeans model.
+        Z = kmeans_model.predict(grid)
+    # Put the result into a color plot
+    Z = Z.reshape(xx.shape)
+    axes.contour(
+        xx,
+        yy,
+        Z,
+        levels=np.arange(n_clusters + 1) - 0.5,
+        # colors="k",
+        colors="black",
+        linewidths=contour_line_width,
+        linestyles=contour_line_style
+    )
+    # Plot the centroids as a big X
+    axes.scatter(
+        cluster_centers[:, 0],
+        cluster_centers[:, 1],
+        marker="x",
+        s=cluster_center_marking_size,
+        linewidths=cluster_center_line_width,
+        color="black",
+        zorder=10,
+    )
+    axes.set_xlim(x_min, x_max)
+    axes.set_ylim(y_min, y_max)
+    axes.set_xticks([])
+    axes.set_yticks([])
