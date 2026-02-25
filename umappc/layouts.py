@@ -319,16 +319,14 @@ def _optimize_layout_euclidean_single_epoch(
             current = head_embedding[i]
             label = cluster_labels[i]
             kmeans_gradient = 2 * (current - cluster_centers[label])
-            within_cluster_dist_squared = rdist(current, cluster_centers[label])
             if gradient_using_prev_embedding:
                 current_original = head_embedding_original[i]
                 kmeans_gradient = 2 * (current_original - cluster_centers[label])
                 within_cluster_dist_squared = rdist(current_original, cluster_centers[label])
-
-            kmeans_penalty_value += lagrange * within_cluster_dist_squared
-
             for d in range(dim):
                 current[d] -= alpha * lagrange * clip(kmeans_gradient[d])
+            within_cluster_dist_squared = rdist(current, cluster_centers[label])
+            kmeans_penalty_value += lagrange * within_cluster_dist_squared
 
 
     kmeans_penalty[n + 1] = kmeans_penalty_value
