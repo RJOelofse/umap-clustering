@@ -8,6 +8,7 @@ try:
     import datashader.transfer_functions as tf
     import datashader.bundling as bd
     import matplotlib.pyplot as plt
+    import matplotlib.axes
     import colorcet
     import matplotlib.colors
     import matplotlib.cm
