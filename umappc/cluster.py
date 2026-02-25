@@ -67,13 +67,14 @@ def init_clusters(
             n_samples = embedding.shape[0]
             rng_generator = np.random.default_rng(seed=seed)
 
-            # Ensure each cluster gets at least one sample
-            initial_labels = np.arange(n_clusters)
-            remaining_labels = rng_generator.integers(low=0, high=n_clusters, size=n_samples - n_clusters)
-            cluster_labels = np.concatenate([initial_labels, remaining_labels])
-            rng_generator.shuffle(cluster_labels)
+            # 1) Pick random initial centers from existing points (no replacement)
+            center_idx = rng_generator.choice(n_samples, size=n_clusters, replace=False)
+            cluster_centers = embedding[center_idx].astype(np.float32, copy=False)
 
-            cluster_centers = compute_cluster_centers(embedding, cluster_labels, n_clusters)
+            # 2) Assign labels to the nearest center (squared Euclidean distance)
+            # ``distances`` has shape (n_samples, n_clusters)
+            distances = ((embedding[:, None, :] - cluster_centers[None, :, :]) ** 2).sum(axis=2)
+            cluster_labels = distances.argmin(axis=1).astype(int)
 
             inertia = compute_inertia(embedding, cluster_labels, cluster_centers, n_clusters)
             
