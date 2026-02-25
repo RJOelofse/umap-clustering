@@ -720,12 +720,12 @@ def optimize_layout_euclidean(
         )
 
         if learning_rate_decay:
-            alpha = initial_alpha * (1.0 - (float(n - n_epoch_burnin) / float(n_epochs)))
+            alpha = initial_alpha * (1.0 - (float(n - n_epoch_burnin) / float(n_epochs - n_epoch_burnin)))
 
         if verbose and n % int(n_epochs / 10) == 0:
             print("\tcompleted ", n, " / ", n_epochs, "epochs")
 
-        if epochs_list is not None and n in epochs_list:
+        if epochs_list is not None and n in epochs_list and n != (n_epochs - 1):
             embedding_list.append(head_embedding.copy())
 
     # Add the last embedding to the list as well
