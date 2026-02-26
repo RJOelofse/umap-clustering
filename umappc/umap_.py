@@ -2231,8 +2231,11 @@ class UMAP(BaseEstimator):
         learning_rate_clustering=1.0,
         learning_rate_decay_clustering=True,
         n_cluster_cycles=2,
+        find_umap_embedding=True,
+        start_from_init_embedding=True,
         cluster_cycles_start_from_init_embedding=False,
         cluster_init="kmeans++",
+        map_cluster_centre_to_init=True,
         number_initial_clustering_runs=1,
         kmeans_n_init=None,
         n_clusters=5,
@@ -2289,8 +2292,11 @@ class UMAP(BaseEstimator):
         self.learning_rate_clustering = learning_rate_clustering
         self.learning_rate_decay_clustering = learning_rate_decay_clustering
         self.n_cluster_cycles = n_cluster_cycles
+        self.find_umap_embedding = find_umap_embedding
+        self.start_from_init_embedding = start_from_init_embedding
         self.cluster_cycles_start_from_init_embedding = cluster_cycles_start_from_init_embedding
         self.cluster_init = cluster_init
+        self.map_cluster_centre_to_init = map_cluster_centre_to_init
         self.number_initial_clustering_runs = number_initial_clustering_runs
         self.kmeans_n_init = kmeans_n_init
         self.n_clusters = n_clusters
