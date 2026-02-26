@@ -1,7 +1,21 @@
 import numpy as np
+from warnings import warn
 
-from sklearnex import patch_sklearn
-patch_sklearn()
+try:
+    from sklearnex import patch_sklearn
+    patch_sklearn()
+except ImportError:
+    warn(
+        """The sklearnex package is not installed. Falling back to standard scikit-learn.
+    You can install sklearnex via pip using
+
+    pip install scikit-learn-intelex
+
+    or via conda using
+
+     conda install scikit-learn-intelex
+    """
+    )
 
 from sklearn.cluster import KMeans
 
