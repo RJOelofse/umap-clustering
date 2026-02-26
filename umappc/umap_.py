@@ -965,8 +965,11 @@ def simplicial_set_embedding(
     learning_rate_clustering=1,
     learning_rate_decay_clustering=False,
     n_cluster_cycles=2,
+    find_umap_embedding=True,
+    start_from_init_embedding=True,
     cluster_cycles_start_from_init_embedding=False,
     cluster_init="kmeans++",
+    map_cluster_centre_to_init=True,
     number_initial_clustering_runs=1,
     kmeans_n_init=None,
     n_clusters=5,
@@ -1410,55 +1413,58 @@ def simplicial_set_embedding(
     lagranges = lagrange if isinstance(lagrange, list) else [lagrange]
 
     if euclidean_output:
-        (
-            embedding,
-            cross_entropy_error,
-            cross_entropy_error_accurate
-        ) = optimize_layout_euclidean(
+        if not clustering or find_umap_embedding:
+            (
                 embedding,
-                embedding,
-                head,
-                tail,
-                weight,
-                gradient_using_prev_embedding,
-                n_epochs,
-                n_epoch_burnin,
-                n_vertices,
-                epochs_per_sample,
-                a,
-                b,
-                rng_state,
-                calculate_cross_entropy=calculate_cross_entropy,
-                calculate_cross_entropy_accurate=calculate_cross_entropy_accurate,
-                cross_entropy_error_accurate_n_neg_samples=cross_entropy_error_accurate_n_neg_samples,
-                clustering=False,
-                gamma=gamma,
-                initial_alpha=initial_alpha,
-                learning_rate_decay=learning_rate_decay,
-                negative_sample_rate=negative_sample_rate,
-                parallel=parallel,
-                verbose=verbose,
-                densmap=densmap,
-                densmap_kwds=densmap_kwds,
-                tqdm_kwds=tqdm_kwds,
-                move_other=True,
-            )
+                cross_entropy_error,
+                cross_entropy_error_accurate
+            ) = optimize_layout_euclidean(
+                    embedding,
+                    embedding,
+                    head,
+                    tail,
+                    weight,
+                    gradient_using_prev_embedding,
+                    n_epochs,
+                    n_epoch_burnin,
+                    n_vertices,
+                    epochs_per_sample,
+                    a,
+                    b,
+                    rng_state,
+                    calculate_cross_entropy=calculate_cross_entropy,
+                    calculate_cross_entropy_accurate=calculate_cross_entropy_accurate,
+                    cross_entropy_error_accurate_n_neg_samples=cross_entropy_error_accurate_n_neg_samples,
+                    clustering=False,
+                    gamma=gamma,
+                    initial_alpha=initial_alpha,
+                    learning_rate_decay=learning_rate_decay,
+                    negative_sample_rate=negative_sample_rate,
+                    parallel=parallel,
+                    verbose=verbose,
+                    densmap=densmap,
+                    densmap_kwds=densmap_kwds,
+                    tqdm_kwds=tqdm_kwds,
+                    move_other=True,
+                )
 
-        if calculate_cross_entropy:
-            aux_data["cross_entropy_error"] = cross_entropy_error
-        if calculate_cross_entropy_accurate:
-            aux_data["cross_entropy_error_accurate"] = cross_entropy_error_accurate
+            if calculate_cross_entropy:
+                aux_data["cross_entropy_error"] = cross_entropy_error
+            if calculate_cross_entropy_accurate:
+                aux_data["cross_entropy_error_accurate"] = cross_entropy_error_accurate
 
         if clustering:
-            if isinstance(embedding, list):
-                aux_data["embedding_list"] = embedding
-                embedding = embedding[-1].copy()
+            if find_umap_embedding:
+                if isinstance(embedding, list):
+                    aux_data["embedding_list"] = embedding
+                    embedding = embedding[-1].copy()
 
-            final_umap_embedding = embedding.copy()
+            # if find_umap_embedding = false then start_embedding = init spectral embedding of umap, else start_embedding = final umap embedding
+            start_embedding = embedding.copy()
 
             if response is not None:
-                cluster_centers = compute_cluster_centers(final_umap_embedding, response, len(np.unique(response)))
-                inertia = compute_inertia(final_umap_embedding, response, cluster_centers, len(np.unique(response)))
+                cluster_centers = compute_cluster_centers(start_embedding, response, len(np.unique(response)))
+                inertia = compute_inertia(start_embedding, response, cluster_centers, len(np.unique(response)))
                 cluster_labels, cluster_centers, inertia = format_cluster_results(response, cluster_centers, inertia)
 
             all_cluster_initialization_embeddings = []
@@ -1480,13 +1486,17 @@ def simplicial_set_embedding(
                 if response is None:
                     seed = int(np.abs(rng_state[0]))
                     cluster_labels, cluster_centers, inertia = init_clusters(
-                        final_umap_embedding,
+                        start_embedding,
                         n_clusters,
                         seed,
                         cluster_init,
                         kmeans_n_init,
                     )
 
+                    # Map the cluster centers of the cluster found on the umap embedding back to the initial embedding
+                    if find_umap_embedding and start_from_init_embedding and map_cluster_centre_to_init:
+                        cluster_centers = compute_cluster_centers(init_umap_embedding.copy(), cluster_labels, n_clusters)
+                        inertia = compute_inertia(init_umap_embedding.copy(), cluster_labels, cluster_centers, n_clusters)
                 cluster_initialization_labels.append(cluster_labels)
                 cluster_initialization_centers.append(cluster_centers)
                 cluster_initialization_inertias.append(inertia)
@@ -1497,7 +1507,13 @@ def simplicial_set_embedding(
                 cluster_centers_copy = cluster_centers.copy()
 
                 for lagr in lagranges:
-                    embedding = final_umap_embedding.copy()
+                    if start_from_init_embedding:
+                        # Start the optimization with the initialized spectral embedding for umap
+                        embedding = init_umap_embedding.copy()
+                    else:
+                        # Start the optimization with the initialized spectral embedding for umap or final umap embedding,
+                        # depending if find_umap_embedding is False or True respectively
+                        embedding = start_embedding.copy()
                     rng_state = rng_state_copy.copy()
 
                     cluster_labels = cluster_labels_copy.copy()
@@ -1675,16 +1691,23 @@ def simplicial_set_embedding(
         aux_data["rad_emb"] = re
 
     if clustering:
-        aux_data["final_umap_embedding"] = final_umap_embedding.copy()
+        if find_umap_embedding:
+            aux_data["final_umap_embedding"] = start_embedding.copy()
         aux_data["embedding_list_clustering"] = all_cluster_initialization_embeddings
+
         if calculate_cross_entropy:
             aux_data["cross_entropy_error_clustering"] = all_cluster_initialization_cross_entropy_errors
         if calculate_cross_entropy_accurate:
             aux_data["cross_entropy_error_accurate_clustering"] = all_cluster_initialization_cross_entropy_accurate_errors
         aux_data["kmeans_penalty"] = all_cluster_initialization_kmeans_penalties
+
         aux_data["cluster_labels"] = all_cluster_initialization_labels
         aux_data["cluster_centers"] = all_cluster_initialization_centers
         aux_data["inertia"] = all_cluster_initialization_inertias
+
+        aux_data["final_cluster_labels"] = all_cluster_initialization_labels[number_initial_clustering_runs-1][len(lagranges)][n_cluster_cycles-1]
+        aux_data["final_cluster_centers"] = all_cluster_initialization_centers[number_initial_clustering_runs-1][len(lagranges)][n_cluster_cycles-1]
+        aux_data["final_inertia"] = all_cluster_initialization_inertias[number_initial_clustering_runs-1][len(lagranges)][n_cluster_cycles-1]
 
     return embedding, aux_data
 
