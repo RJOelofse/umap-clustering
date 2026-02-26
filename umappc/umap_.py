@@ -3480,21 +3480,24 @@ class UMAP(BaseEstimator):
             )
 
             if self.n_epochs_list is not None:
-                if "embedding_list" not in aux_data:
-                    raise KeyError(
-                        "No list of embedding were found in 'aux_data'. "
-                        "It is likely the layout optimization function "
-                        "doesn't support the list of int for 'n_epochs'."
-                    )
-                else:
-                    self.embedding_list_ = [
-                        e[inverse] for e in aux_data["embedding_list"]
-                    ]
+                if not self.clustering or self.find_umap_embedding:
+                    if "embedding_list" not in aux_data:
+                        raise KeyError(
+                            "No list of embedding were found in 'aux_data'. "
+                            "It is likely the layout optimization function "
+                            "doesn't support the list of int for 'n_epochs'."
+                        )
+                    else:
+                        self.embedding_list_ = [
+                            e[inverse] for e in aux_data["embedding_list"]
+                        ]
 
             if self.calculate_cross_entropy:
-                self.cross_entropy_error = aux_data["cross_entropy_error"]
+                if not self.clustering or self.find_umap_embedding:
+                    self.cross_entropy_error = aux_data["cross_entropy_error"]
             if self.calculate_cross_entropy_accurate:
-                self.cross_entropy_error_accurate = aux_data["cross_entropy_error_accurate"]
+                if not self.clustering or self.find_umap_embedding:
+                    self.cross_entropy_error_accurate = aux_data["cross_entropy_error_accurate"]
 
             # Assign any points that are fully disconnected from our manifold(s) to have embedding
             # coordinates of np.nan.  These will be filtered by our plotting functions automatically.
@@ -3515,7 +3518,8 @@ class UMAP(BaseEstimator):
                 self.rad_emb_ = aux_data["rad_emb"][inverse]
 
             if self.clustering:
-                self.final_umap_embedding = aux_data["final_umap_embedding"]
+                if self.find_umap_embedding:
+                    self.final_umap_embedding = aux_data["final_umap_embedding"]
 
                 # previously for `embedding_list_` or `embedding_` we used `inverse` to map from our
                 # internal structures to the input data when unique=True, this mapping is not currently
@@ -3533,6 +3537,10 @@ class UMAP(BaseEstimator):
                 self.cluster_labels = aux_data["cluster_labels"]
                 self.cluster_centers = aux_data["cluster_centers"]
                 self.inertia = aux_data["inertia"]
+
+                self.final_cluster_labels = aux_data["final_cluster_labels"]
+                self.final_cluster_centers = aux_data["final_cluster_centers"]
+                self.final_inertia = aux_data["final_inertia"]
 
         if self.verbose:
             print(ts() + " Finished embedding")
